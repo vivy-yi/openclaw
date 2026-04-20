@@ -9,6 +9,8 @@ tags:
   - Changelog
 date: "2026-04-18"
 author: "OpenClaw Team"
+review_status: approved
+review_date: 2026-04-20
 ---
 
 # OpenClaw v2026.4.9 Release 亮点

@@ -4,428 +4,958 @@ description: "将 Addy Osmani 的七大命令体系和质量门禁设计融入 O
 tags: [OpenClaw, 开发流程, 质量门禁, Agent Skills, 最佳实践]
 难度: intermediate
 预计阅读时间: 15分钟
+review_status: approved
+review_date: 2026-04-20
 ---
 
-# OpenClaw 开发流程规范 — 引入 Addy Osmani 质量门禁体系
+## 1. 概述：为什么 AI 编码需要开发流程
 
-> **背景**：传统 AI 编码依赖"直觉"和"临场判断"，导致代码质量不稳定、流程缺乏规范。本教程将 Addy Osmani 的七大命令体系和质量门禁设计融入 OpenClaw，帮助你建立系统性的 AI 驱动开发流程。
+当你第一次用 OpenClaw（`exec`）运行一段代码，可能感觉很爽——它直接帮你执行，快速得到结果。但当任务变得复杂：多人协作、长期维护、安全敏感的系统，你会很快遇到这些问题：
 
-**目标读者**：希望用 OpenClaw 执行系统性开发任务的工程师  
-**前置要求**：熟悉 OpenClaw 基础工具（exec、browser、sessions_spawn）
+- 代码功能对了，但边界情况一堆 Bug
+- AI 生成代码太快，一口气改了几千行，没人能 review
+- 安全漏洞悄然引入，直到上线后才暴露
+- 三个月后再看自己写的代码，完全不认识
 
----
+**根本原因：AI 生成代码的质量上限，由开发流程的下限决定。**
 
-## 一、为什么 AI 编码需要开发流程
+Addy Osmani（Google Chrome 团队工程师）的 Agent Skills 框架给出了答案：不是限制 AI 的能力，而是建立一套**质量门禁体系**，让 AI 在每个关键节点接受检查。这套体系最初为 Claude Code、Cursor、Gemini CLI 等平台设计，但其核心理念完全适用于 OpenClaw。
 
-当你用 OpenClaw 执行编码任务时，是否遇到过以下问题：
-
-- 代码写完了，但边界情况没考虑周全
-- 改了一个文件，却意外影响了其他模块
-- 提交后才发现有安全问题或性能问题
-- 任务做到一半，发现方向跑偏了
-
-这些问题并非工具能力不足，而是**缺乏系统性的流程约束**。
-
-Addy Osmani（Google Chrome 团队工程师）设计了一套完整的 Agent Skills 体系，将资深工程师的开发经验编码为可验证的流程规则。这套体系已经被超过 17,000 个 GitHub Stars 证明其价值。
+本章教程将教你如何在 OpenClaw 中落地这套体系。
 
 ---
 
-## 二、七大命令体系：AI 编码的完整生命周期
+## 2. 七大命令体系介绍
 
-Addy Osmani 的命令体系覆盖了从想法到上线的完整开发周期：
+Addy Osmani 将开发流程拆解为七个有序的命令阶段，每个阶段都有明确的触发条件和质量标准：
 
 ```
-DEFINE          PLAN           BUILD          VERIFY         REVIEW          SHIP
- ┌──────┐      ┌──────┐      ┌──────┐      ┌──────┐      ┌──────┐      ┌──────┐
- │ Idea │ ───▶ │ Spec │ ───▶ │ Code │ ───▶ │ Test │ ───▶ │  QA  │ ───▶ │  Go  │
- │Refine│      │  PRD │      │ Impl │      │Debug │      │ Gate │      │ Live │
- └──────┘      └──────┘      └──────┘      └──────┘      └──────┘      └──────┘
-  /spec          /plan          /build        /test         /review       /ship
+DEFINE ──▶ PLAN ──▶ BUILD ──▶ VERIFY ──▶ REVIEW ──▶ SHIP
+(spec)    (plan)   (build)   (test)    (review)   (ship)
+                         ↕
+                   /code-simplify
 ```
 
-| 命令 | 核心原则 | 使用场景 |
-|------|----------|----------|
-| `/spec` | Spec before code | 需求模糊、启动新项目 |
-| `/plan` | Small, atomic tasks | 已有 spec，拆解任务 |
-| `/build` | One slice at a time | 增量实现、任何多文件变更 |
-| `/test` | Tests are proof | 编写测试、验证逻辑 |
-| `/review` | Improve code health | 合并前质量把控 |
-| `/code-simplify` | Clarity over cleverness | 代码可读性/可维护性下降 |
-| `/ship` | Faster is safer | 部署上线 |
+### 2.1 整体流程一览
 
-### 在 OpenClaw 中应用
+| 阶段 | 命令 | 核心问题 | 产出 |
+|------|------|----------|------|
+| **DEFINE** | `/spec` | 我们要解决什么？ | PRD / Spec 文档 |
+| **PLAN** | `/plan` | 我们如何拆解任务？ | 任务列表 + 验收标准 |
+| **BUILD** | `/build` | 代码怎么写？ | 可运行代码 |
+| **VERIFY** | `/test` | 代码对不对？ | 测试结果 |
+| **REVIEW** | `/review` | 代码够好吗？ | Quality Gate 报告 |
+| **SHIP** | `/ship` | 怎么安全上线？ | 部署方案 |
+| **辅助** | `/code-simplify` | 代码能更清晰吗？ | 简化后代码 |
 
-OpenClaw 不使用斜杠命令，但可以通过 Skill 描述匹配触发类似的工作流：
+### 2.2 各阶段详解
+
+#### DEFINE — 明确做什么
+
+**触发时机**：需求模糊、启动新项目、方向不明确时。
+
+**核心原则**：Spec before code。在动手写代码之前，先把目标定义清楚。
+
+```
+# 在 OpenClaw 中启动 DEFINE 阶段
+openclaw sessions_spawn --skill spec-driven-development
+```
+
+**OpenClaw 集成**：
 
 ```markdown
-# 启动新任务时的提示示例
+## DEFINE 阶段 OpenClaw 操作示例
 
-我需要开发一个用户认证模块。请先完成以下工作：
+在 OpenClaw 中，你可以用 `exec` 创建本地 spec 文件：
 
-1. **Spec 阶段**：描述模块的目标、技术方案、接口设计、边界情况
-2. **Plan 阶段**：拆解为 3-5 个小任务，每个任务完成后验证
-3. **Build 阶段**：每次只实现一个垂直切片
+/* 用 exec 创建 SPEC.md */
+openclaw exec -- "cat > SPEC.md << 'EOF'
+# 项目名称：用户认证服务
 
-完成后请按五轴评估进行自检：correctness/readability/architecture/security/performance
+## 1. Objective（目标）
+提供 JWT-based 用户认证，支持注册/登录/登出。
+
+## 2. Commands（核心命令）
+- POST /auth/register — 用户注册
+- POST /auth/login — 用户登录
+- POST /auth/logout — 登出
+
+## 3. Project Structure（项目结构）
+src/
+  auth/
+    handlers.go
+    middleware.go
+    models.go
+  main.go
+
+## 4. Code Style（代码风格）
+- 遵循 Go 标准库风格
+- 错误处理：wrap + context
+- 命名：SmallCASE
+
+## 5. Testing Strategy（测试策略）
+- 单元测试覆盖率 > 80%
+- 集成测试：模拟数据库
+
+## 6. Boundaries（边界）
+- 不处理 OAuth 第三方登录
+- 不存储明文密码
+EOF"
+```
+
+#### PLAN — 拆解任务
+
+**触发时机**：已有明确 spec，需要拆解为可执行任务时。
+
+**核心原则**：Small, atomic tasks。每个任务应该小到可以在一个 session 中完成验证。
+
+**OpenClaw 集成**：
+
+```markdown
+## PLAN 阶段 OpenClaw 操作示例
+
+使用 `exec` 结合任务分解：
+
+openclaw exec -- "
+# 拆解为原子任务
+cat > TASKS.md << 'EOF'
+## 任务列表
+
+### Task 1: 数据模型设计
+- [ ] 定义 User struct
+- [ ] 定义 AuthRequest/Response
+- [ ] 验收：struct 字段完整，含 JSON tag
+
+### Task 2: 注册接口
+- [ ] 实现 /auth/register handler
+- [ ] 密码 bcrypt 哈希
+- [ ] 验收：重复注册返回 409
+
+### Task 3: 登录接口
+- [ ] 实现 /auth/login handler
+- [ ] 生成 JWT token
+- [ ] 验收：正确密码返回 token，错误返回 401
+
+### Task 4: 中间件
+- [ ] 实现 JWT 验证中间件
+- [ ] 验收：无效 token 返回 401
+EOF"
+```
+
+#### BUILD — 编写代码
+
+**触发时机**：有具体任务要实现、任何涉及多文件变更时。
+
+**核心原则**：One slice at a time。先实现最小功能切片，再逐步扩展。
+
+**OpenClaw 集成**：
+
+```markdown
+## BUILD 阶段 OpenClaw 操作示例
+
+# 使用 exec 执行增量实现
+openclaw exec -- "
+# Task 1: 最小功能切片 — 只实现注册
+cat > src/auth/models.go << 'EOF'
+package auth
+
+import (
+    \"time\"
+)
+
+type User struct {
+    ID        string    \`json:\"id\"\`
+    Email     string    \`json:\"email\"\`
+    Password  string    \`json:\"-\"\` // never expose
+    CreatedAt time.Time \`json:\"created_at\"\`
+}
+EOF
+
+# Task 2: handlers
+cat > src/auth/handlers.go << 'EOF'
+package auth
+
+import (
+    \"net/http\"
+    \"time\"
+
+    \"github.com/golang-jwt/jwt/v5\"
+    \"golang.org/x/crypto/bcrypt\"
+)
+
+var jwtSecret = []byte(\"change-in-production\")
+
+func Register(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Email    string \`json:\"email\"\`
+        Password string \`json:\"password\"\`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, \"invalid request\", http.StatusBadRequest)
+        return
+    }
+
+    hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+    if err != nil {
+        http.Error(w, \"internal error\", http.StatusInternalServerError)
+        return
+    }
+
+    user := User{
+        ID:        generateID(),
+        Email:     req.Email,
+        Password:  string(hash),
+        CreatedAt: time.Now(),
+    }
+
+    // Save to DB (stub)
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(user)
+}
+EOF
+"
+```
+
+#### VERIFY — 验证代码
+
+**触发时机**：代码写完后、提交前、发现 Bug 时。
+
+**核心原则**：Tests are proof。没有测试的代码等于没有完成的代码。
+
+**OpenClaw 集成**：
+
+```markdown
+## VERIFY 阶段 OpenClaw 操作示例
+
+# 运行测试
+openclaw exec -- "go test ./src/auth/... -v -cover"
+
+# 验证输出示例
+# === RUN   TestRegister
+# --- PASS: TestRegister (0.05s)
+# PASS
+# coverage: 85.3%
+
+# 如果测试失败，使用 browser 检查运行时行为
+openclaw browser open --url http://localhost:8080/auth/register
+```
+
+#### REVIEW — 代码审查
+
+**触发时机**：合并前、提交前、重要功能完成后。
+
+**核心原则**：Improve code health。Review 不是挑刺，而是质量门禁。
+
+**OpenClaw 集成**：
+
+```markdown
+## REVIEW 阶段 — 五轴评估在 OpenClaw 中执行
+
+在 OpenClaw 中启动 code review：
+
+openclaw exec -- "
+# 生成 diff 作为 review 输入
+git diff --stat HEAD~1 > review-diff.txt
+cat review-diff.txt
+"
+
+# 使用 sessions_spawn 启动专门的 reviewer agent
+openclaw sessions_spawn --label code-reviewer --skill code-review-and-quality
+```
+
+> 📌 五轴评估详解见第四章。
+
+#### SHIP — 上线部署
+
+**触发时机**：代码通过 review、准备部署到生产环境时。
+
+**核心原则**：Faster is safer。更快的反馈循环 = 更安全的部署。
+
+**OpenClaw 集成**：
+
+```markdown
+## SHIP 阶段 OpenClaw 操作示例
+
+# 1. 上线前检查清单
+openclaw exec -- "
+cat > DEPLOY-CHECKLIST.md << 'EOF'
+## 上线前检查
+
+### 代码层面
+- [ ] 所有测试通过 (go test ./...)
+- [ ] 覆盖率 > 80%
+- [ ] 无 TODO/FIXME 未完成
+- [ ] 无 hardcoded secrets
+
+### 部署层面
+- [ ] 特性开关已配置
+- [ ] 回滚方案已准备
+- [ ] 监控告警已设置
+- [ ] 文档已更新
+EOF
+"
+
+# 2. 原子提交
+openclaw exec -- "
+git add -p  # 逐块添加，保持原子性
+git commit -m 'feat(auth): implement user registration'
+"
+
+# 3. 触发 CI/CD
+openclaw exec -- "gh workflow run deploy.yml"
 ```
 
 ---
 
-## 三、Spec-Driven Development：需求规范的第一步
+## 3. Spec-Driven Development 实操
 
-### 3.1 什么是 Spec
+### 3.1 什么是 Spec-Driven Development
 
-Spec（规格说明）是比 PRD 更轻量的需求文档。它的核心价值在于：**在写代码之前，先对齐理解和期望**。
+Spec-Driven Development（SDD）不是"写个 README"，而是**在代码之前建立一份可验证的合同**。它的核心是六核心区域：
 
-### 3.2 Spec 的六核心区域
-
-当你用 OpenClaw 启动新项目或重大功能时，要求模型先输出以下内容：
-
-```markdown
-## Spec: [功能名称]
-
-### 1. Objective（目标）
-- 这个功能解决什么问题？
-- 成功标准是什么？
-
-### 2. Commands（可用的命令/工具）
-- 实现过程中可使用哪些工具？
-- 哪些操作需要人工批准？
-
-### 3. Project Structure（项目结构）
-- 目录如何组织？
-- 主要模块的职责是什么？
-
-### 4. Code Style（代码风格）
-- 命名规范
-- 注释要求
-- 禁止的模式
-
-### 5. Testing Strategy（测试策略）
-- 单元测试覆盖率目标
-- 集成测试场景
-- 手动验证清单
-
-### 6. Boundaries（边界）
-- Always do：必须执行（如测试通过后才能合并）
-- Ask first：需人工批准（如数据库 schema 变更）
-- Never do：禁止执行（如直接 commit secrets）
+```
+┌─────────────────────────────────────────┐
+│           SPEC 文档六核心               │
+├──────────────┬──────────────────────────┤
+│ Objective    │ 我们要达到什么目标？       │
+│ Commands     │ 用户/系统如何交互？        │
+│ Structure    │ 代码如何组织？             │
+│ Code Style   │ 什么样的代码算好代码？      │
+│ Testing      │ 如何证明它工作？           │
+│ Boundaries   │ 什么是我们不做的？         │
+└──────────────┴──────────────────────────┘
 ```
 
-### 3.3 OpenClaw 中的 Spec 实操
+### 3.2 在 OpenClaw 中执行 SDD
+
+#### Step 1: 创建 Spec 文件
 
 ```markdown
-# 创建新功能时的标准开场白
+<!-- 使用 exec 创建项目 spec -->
+openclaw exec -- "cat > SPEC.md << 'SPECEOF'
+# OpenClaw 插件系统 — Spec
 
-请先阅读以下规范，然后输出 Spec 再开始实现：
+## 1. Objective
+为 OpenClaw 提供可插拔的插件架构，支持第三方扩展。
 
-## 规范要求
-1. 假设前置：列出你对现有代码库的假设
-2. 六区域覆盖：Objective/Commands/Structure/Style/Testing/Boundaries
-3. 三层边界：明确 Always do / Ask first / Never do
+## 2. Commands
+- `openclaw plugin install <name>` — 安装插件
+- `openclaw plugin list` — 列出已安装插件
+- `openclaw plugin unload <name>` — 卸载插件
 
-## 示例输出格式
+## 3. Project Structure
+openclaw/
+  plugin/
+    manager.go      # 插件管理器
+    registry.go     # 插件注册表
+    loader.go       # 动态加载器
+  main.go
 
-假设：
-- 后端 API 基于 Express.js
-- 数据库使用 PostgreSQL
-- 前端已有 React 基础组件库
+## 4. Code Style
+- Go: 遵循 golang/go 风格
+- 错误: wrap + context，从不忽略
+- 命名: 表达意图，避免缩写
 
-Spec: 用户注册模块
-[按照六区域格式输出]
+## 5. Testing Strategy
+- 单元测试: manager_test.go, loader_test.go
+- 覆盖率目标: 85%+
+- Mock: 使用 interfaces 而非具体实现
+
+## 6. Boundaries
+- **Always do**: 验证插件签名、隔离插件错误
+- **Ask first**: 删除用户数据、修改核心配置
+- **Never do**: 在插件中执行 shell 代码、硬编码凭据
+SPECEOF
+"
+```
+
+#### Step 2: 假设前置确认
+
+在写代码前，先列出你的假设。这些假设是门禁的前哨：
+
+```markdown
+## 假设前置确认清单
+
+在开始实现前，回答以下问题：
+
+1. [ ] 插件是 Go plugin（.so）还是 WASM？
+       → 决策：Go plugin，需要 Go 1.17+
+    
+2. [ ] 插件错误会影响主程序吗？
+       → 决策：插件运行在独立 goroutine，错误隔离
+    
+3. [ ] 插件如何加载？
+       → 决策：启动时扫描 plugin/ 目录，延迟加载
+    
+4. [ ] 插件版本如何管理？
+       → 决策：语义版本，API 契约不兼容则拒绝加载
+```
+
+#### Step 3: Spec 验证
+
+Spec 写完后，用 OpenClaw 验证：
+
+```markdown
+## 验证 Spec 完整性
+
+openclaw exec -- "
+# 检查 spec 是否包含六核心
+for section in 'Objective' 'Commands' 'Structure' 'Code Style' 'Testing Strategy' 'Boundaries'; do
+    if grep -q \"\$section\" SPEC.md; then
+        echo \"✅ \$section\"
+    else
+        echo \"❌ Missing: \$section\"
+    fi
+done
+"
 ```
 
 ---
 
-## 四、五轴 Code Review：在 OpenClaw 中自动质量把控
+## 4. 五轴 Code Review 在 OpenClaw 中的应用
 
 ### 4.1 五轴评估体系
 
-每次代码变更后，用以下五个维度进行自检：
+Code Review 不是"代码对不对"，而是"代码够不够好"。Addy Osmani 的五轴体系提供了一套结构化的评估框架：
 
-| 轴 | 核心问题 | OpenClaw 检查方法 |
-|----|----------|-------------------|
-| **Correctness** | 代码是否做了它声称的事？ | 运行测试，检查边界情况 |
-| **Readability** | 另一个工程师能否理解？ | 代码审查，检查命名和注释 |
-| **Architecture** | 是否引入不必要的复杂性？ | 检查模块边界，是否符合现有架构 |
-| **Security** | 是否有安全漏洞？ | 检查输入验证，密钥管理 |
-| **Performance** | 是否有性能问题？ | 检查 N+1 查询、无界循环 |
+| 轴 | 核心问题 | 检查项 |
+|----|----------|--------|
+| **Correctness** | 代码做的是它声称的事吗？ | 边界条件、错误路径、并发安全 |
+| **Readability** | 另一个工程师能理解吗？ | 命名、注释、结构复杂度 |
+| **Architecture** | 符合系统设计吗？ | 耦合度、依赖方向、扩展性 |
+| **Security** | 有安全漏洞吗？ | 输入验证、密钥管理、权限控制 |
+| **Performance** | 有性能问题吗？ | N+1 查询、无界循环、内存泄漏 |
 
-### 4.2 OpenClaw 中的自动化检查
+### 4.2 在 OpenClaw 中执行五轴 Review
 
 ```markdown
-# 代码提交前的检查清单
+## 五轴 Review 实操
 
-完成实现后，请执行以下检查：
+### 轴 1: Correctness
+openclaw exec -- "
+# 检查边界条件处理
+grep -n 'if err != nil' src/auth/handlers.go
+grep -n 'panic' src/**/*.go
+go vet ./...
 
-## 1. Correctness
-- [ ] 所有测试通过：`exec` 运行测试命令
-- [ ] 边界情况覆盖：检查 null/undefined/空数组
+# 运行所有测试
+go test -race ./...
+"
 
-## 2. Readability  
-- [ ] 命名清晰：变量名、函数名见名知意
-- [ ] 注释到位：复杂逻辑有解释
+### 轴 2: Readability
+openclaw exec -- "
+# 检查注释覆盖率
+count=\$(grep -c '^\s*//' src/auth/*.go)
+total=\$(grep -c '^\s*func' src/auth/*.go)
+echo \"Comment ratio: \$count/\$total functions documented\"
 
-## 3. Architecture
-- [ ] 模块边界清晰
-- [ ] 没有循环依赖
+# 检查函数长度
+wc -l src/auth/*.go
+"
 
-## 4. Security
-- [ ] 用户输入有验证
-- [ ] 无硬编码密钥（使用环境变量）
-- [ ] SQL 注入防护
+### 轴 3: Architecture
+openclaw exec -- "
+# 检查循环依赖
+go mod graph | awk '{print \$1}' | sort | uniq > /tmp/deps.txt
+# 手动检查依赖方向是否合理
+"
 
-## 5. Performance
-- [ ] 无 N+1 查询问题
-- [ ] 无无界循环
-- [ ] 大数据集合有分页
+### 轴 4: Security
+openclaw exec -- "
+# 检查密钥硬编码
+grep -rn 'password\|secret\|api_key' --include='*.go' src/
 
-## 五轴自检通过后，再进行 Git commit
+# 运行安全检查
+gosec ./...
+
+# 检查 SQL 注入（如果有）
+grep -n 'Sprintf\|fmt.Sprintf.*SELECT' src/**/*.go
+"
+
+### 轴 5: Performance
+openclaw exec -- "
+# 运行性能测试
+go test -bench=. -benchmem src/auth/
+
+# 检查内存分配
+go build -gcflags='-m' ./... 2>&1 | grep 'leaking'
+"
 ```
 
-### 4.3 使用 exec 工具做自动化验证
+### 4.3 Review 输出模板
 
-```javascript
-// 示例：OpenClaw exec 命令进行代码质量检查
+```markdown
+## Code Review 报告
 
-// 1. 运行测试
-exec({ command: "npm test" })
+**PR/Commit**: `feat(auth): add user registration`
+**Reviewer**: OpenClaw Agent
+**Date**: 2026-04-20
 
-// 2. 检查代码格式
-exec({ command: "npm run lint" })
+### 五轴评估结果
 
-// 3. 检查类型
-exec({ command: "npx tsc --noEmit" })
+| 轴 | 结果 | 说明 |
+|----|------|------|
+| ✅ Correctness | PASS | 错误处理完整，边界条件覆盖 |
+| ⚠️ Readability | WARN | `handleAuth()` 函数超过 80 行，建议拆分 |
+| ✅ Architecture | PASS | 依赖方向正确，符合分层设计 |
+| ✅ Security | PASS | 密码 bcrypt 哈希，无硬编码凭据 |
+| ✅ Performance | PASS | 无 N+1 查询 |
 
-// 4. 安全扫描
-exec({ command: "npm audit --audit-level=moderate" })
+### Action Items
+- [ ] 拆分 `handleAuth()` 为独立子函数
+- [ ] 添加注册请求的 email 格式验证
+- [ ] 更新 API 文档
+
+### 结论
+**可以合并**（待修复 Action Items）
 ```
 
 ---
 
-## 五、变更管理：100 行原则
+## 5. 变更管理：100 行原则
 
-### 5.1 为什么变更大小重要
+### 5.1 为什么变更规模重要
 
-| 变更规模 | 可审查性 | 建议 |
-|----------|----------|------|
-| ~100 行 | ✅ 一个会话可完成 | 推荐目标 |
-| ~300 行 | 🟡 单逻辑变更可接受 | 需要详细说明 |
-| ~1000 行 | ❌ 太大 | 必须拆分 |
+当你用 AI 生成代码时，一个常见的陷阱是：**让 AI 一口气改完所有东西**。结果是：
+
+- 1000 行变更，reviewer 只能"看起来差不多"
+- 出问题难以定位是哪一块引入的
+- 回滚风险大
+
+Addy Osmani 的变更有理规则：
+
+```
+~100 lines changed   → Good. Reviewable in one sitting.
+~300 lines changed   → Acceptable if it's a single logical change.
+~1000+ lines changed → Too large. Split it.
+```
 
 ### 5.2 拆分策略
 
-当变更超过 100 行时，采用以下策略拆分：
+| 策略 | 方法 | OpenClaw 实现 |
+|------|------|--------------|
+| **Stack** | 小提交链，每个基于前一个 | `git commit --fixup` |
+| **By file group** | 不同文件组给不同 reviewer | `git add src/auth/ && git commit` |
+| **Horizontal** | 先共享代码，再消费者 | 创建 `utils/` → 使用方 |
+| **Vertical** | 完整功能切片（数据+逻辑+UI） | 端到端功能分支 |
 
-| 策略 | 方法 | 适用场景 |
-|------|------|----------|
-| **Stack** | 提交小变更，基于它开始下一个 | 顺序依赖 |
-| **By file group** | 不同变更组对应不同 reviewer | 横切关注点 |
-| **Horizontal** | 先创建共享代码/桩，然后是消费者 | 分层架构 |
-| **Vertical** | 拆分为更小的全栈功能切片 | 功能工作 |
-
-### 5.3 OpenClaw 中的增量实现
+### 5.3 OpenClaw 变更管理实操
 
 ```markdown
-# 大任务拆解示例
+## 100 行原则实操
 
-原始任务：重构整个用户模块
+### 检查当前变更规模
+openclaw exec -- "
+git diff --stat HEAD
 
-拆解后的执行计划：
+# 示例输出:
+# src/auth/handlers.go | 45 ++---
+# src/auth/models.go   | 23 ++--
+# 2 files changed, 68 insertions(+), 34 deletions(-)
+# Total: 68 lines changed ✅
+"
 
-## Sprint 1: 数据层
-1. 创建 UserRepository 类
-2. 添加单元测试
-3. 验证测试通过
+### 原子提交模式
+openclaw exec -- "
+# 提交每个逻辑变更
+git add src/auth/models.go
+git commit -m 'auth: define User and AuthRequest models'
 
-## Sprint 2: 服务层
-1. 创建 UserService 类
-2. 依赖 UserRepository
-3. 添加单元测试
+git add src/auth/handlers.go
+git commit -m 'auth: implement /register handler with bcrypt'
 
-## Sprint 3: API 层
-1. 创建 UserController
-2. 挂载路由
-3. 集成测试
+git add src/auth/middleware.go
+git commit -m 'auth: add JWT validation middleware'
+"
 
-每个 Sprint 完成时执行五轴自检，确认无问题后再进行下一个。
+### Stack 提交（基于前一个）
+openclaw exec -- "
+# 假设第一个提交已推送
+FIRST_COMMIT=\$(git log --oneline -1)
+git checkout -b feature/auth-login
+
+# 第二个提交基于第一个
+git commit --fixup \$FIRST_COMMIT
+git rebase -i --autosquash HEAD~2
+"
+```
+
+### 5.4 OpenClaw sessions_spawn 用于变更拆分
+
+当你有一个大变更需要拆分时，可以用多 agent 协作：
+
+```markdown
+## 使用 sessions_spawn 拆分变更
+
+# 启动拆分规划 agent
+openclaw sessions_spawn \
+  --label change-splitter \
+  --skill planning-and-task-breakdown \
+  --context "任务：重构 auth 模块，计划拆分为 5 个原子提交"
+
+# 拆分 agent 会输出类似：
+# Commit 1: 'auth: extract User model' (25 lines)
+# Commit 2: 'auth: add password hashing utils' (18 lines)
+# Commit 3: 'auth: implement Register handler' (35 lines)
+# Commit 4: 'auth: implement Login handler' (40 lines)
+# Commit 5: 'auth: add JWT middleware' (28 lines)
 ```
 
 ---
 
-## 六、安全边界：三层系统
+## 6. 安全边界：三层系统
 
-### 6.1 三层边界定义
+### 6.1 三层边界体系
 
-| 层级 | 定义 | 示例 |
-|------|------|------|
-| **Always do** | 必须执行 | 运行测试后再提交、输入验证、使用环境变量存储密钥 |
-| **Ask first** | 需人工批准 | 数据库 schema 变更、删除数据、外部 API 密钥配置 |
-| **Never do** | 禁止执行 | 直接 commit secrets、硬编码密码、删除日志 |
+Addy Osmani 定义了一套三层安全边界，让 AI 知道什么可以做、什么要问、什么绝对不能做：
 
-### 6.2 OpenClaw 安全实践
-
-```markdown
-# 安全边界示例
-
-在开始任何涉及以下内容的任务时，先确认你已经：
-
-## Always do ✅
-- [ ] 密钥存储在环境变量，不硬编码
-- [ ] 用户输入进行验证和清理
-- [ ] SQL 查询使用参数化语句
-- [ ] 敏感操作有日志记录
-
-## Ask first ⚠️
-- [ ] 数据库结构变更（先备份）
-- [ ] 删除用户数据（需二次确认）
-- [ ] 修改认证逻辑（先讨论）
-
-## Never do 🚫
-- [ ] 直接 commit .env 或 credentials
-- [ ] 在代码中硬编码密码
-- [ ] 忽略安全警告继续执行
+```
+┌─────────────────────────────────────────────┐
+│           三层安全边界                       │
+├─────────────────┬───────────────────────────┤
+│  ✅ Always do   │ 必须执行（安全默认）         │
+│  ❓ Ask first   │ 需要人工批准（高风险操作）    │
+│  🚫 Never do    │ 绝对禁止（红线）             │
+└─────────────────┴───────────────────────────┘
 ```
 
-### 6.3 使用 browser 工具时的安全注意
+### 6.2 各层级详解
+
+#### Always do（必须执行）
 
 ```markdown
-# OAuth/第三方集成安全
+## OpenClaw 中的 Always do 规则
 
-当使用 browser 工具自动配置 OAuth 时：
+# 1. 测试通过后再提交
+openclaw exec -- "go test ./... && git commit"
 
-1. Ask first：确认 redirect URI 和 scopes
-2. 验证：检查最终 redirect 的 URL 是否正确
-3. 不要：保存 access token 到代码中
-4. 使用：browser 的安全模式处理敏感数据
+# 2. 验证输入
+# 所有用户输入必须验证
+if email != "" && strings.Contains(email, "@") {
+    // proceed
+}
+
+# 3. 错误 wrap + context
+if err != nil {
+    return fmt.Errorf("auth.Register: %w", err)
+}
+
+# 4. 特性开关保护
+if !features.IsEnabled("new-auth") {
+    return ErrFeatureNotEnabled
+}
+```
+
+#### Ask first（需人工批准）
+
+```markdown
+## OpenClaw 中的 Ask first 规则
+
+以下操作必须人工确认后才能执行：
+
+1. 数据库 Schema 变更
+   - 添加/删除列
+   - 修改索引
+   - 数据迁移脚本
+
+2. 认证/授权逻辑变更
+   - 修改权限模型
+   - 添加新的认证方式
+   - 修改 token 过期时间
+
+3. 外部集成变更
+   - 添加新的第三方 API
+   - 修改 webhook 逻辑
+   - 变更 API 版本
+
+4. 敏感配置变更
+   - 修改日志级别（可能暴露敏感数据）
+   - 变更加密参数
+   - 调整 rate limiting 阈值
+
+# OpenClaw 实现：使用 confirm 工具
+openclaw exec -- "
+echo '⚠️  即将执行数据库迁移'
+echo '操作: ALTER TABLE users ADD COLUMN last_login TIMESTAMP'
+read -p '确认执行? (yes/no): ' confirm
+if [ \"\$confirm\" != 'yes' ]; then
+    echo '已取消'
+    exit 1
+fi
+"
+```
+
+#### Never do（绝对禁止）
+
+```markdown
+## OpenClaw 中的 Never do 规则（红线）
+
+🚫 以下操作在 OpenClaw 中绝对禁止：
+
+1. 提交 secrets 到代码库
+   # 检查
+   git diff --staged | grep -i 'password\|secret\|key\|token'
+   # ✅ 正确做法：使用环境变量或 secret manager
+
+2. 在代码中硬编码凭证
+   # ❌ 错误
+   apiKey := "sk-1234567890abcdef"
+   # ✅ 正确
+   apiKey := os.Getenv("API_KEY")
+
+3. 绕过认证中间件
+   # ❌ 绝对禁止注释掉中间件
+   // router.Use(authMiddleware) // TODO: temporary
+
+4. 在生产环境执行 destructive 操作
+   # 必须有回滚方案
+   # 必须有数据备份
+
+5. 将用户输入直接插入 SQL
+   # ❌ SQL 注入风险
+   query := fmt.Sprintf("SELECT * FROM users WHERE email = '%s'", email)
+   # ✅ 正确：参数化查询
+   db.QueryRow("SELECT * FROM users WHERE email = ?", email)
+```
+
+### 6.3 在 OpenClaw Skill 中定义安全边界
+
+你可以创建一个 OpenClaw skill 来强制这些边界：
+
+```markdown
+# ~/.openclaw/skills/openclaw-security-boundaries/SKILL.md
+
+# OpenClaw Security Boundaries Skill
+
+## 触发描述
+当执行涉及数据库、认证、外部 API 或敏感数据的操作时激活。
+
+## 安全规则
+
+### Always Do
+- 执行前运行 `go test ./...` 确认测试通过
+- 使用 `gosec ./...` 扫描安全漏洞
+- 检查 `git diff` 确认无 secrets 泄露
+
+### Ask First
+- 数据库 schema 变更
+- 认证/授权逻辑修改
+- 添加新的外部依赖
+- 修改加密配置
+
+### Never Do
+- 硬编码 secrets 或凭据
+- 直接拼接 SQL
+- 绕过认证中间件
+- 生产环境 destructive 操作
 ```
 
 ---
 
-## 七、OpenClaw 集成示例
+## 7. OpenClaw 集成示例
 
 ### 7.1 完整开发流程演示
 
-假设任务：为一个现有 Express 项目添加用户注册功能
+下面是一个从 0 到上线的完整 OpenClaw 开发流程，结合 Addy Osmani 七大命令体系：
+
+#### Phase 1: DEFINE + PLAN
 
 ```markdown
-## Step 1: Spec 阶段
+# 1. 启动新项目，明确需求
+openclaw exec -- "cat > SPEC.md << 'EOF'
+# 用户认证服务 — Spec
 
-启动 OpenClaw 会话，描述：
+## Objective
+提供安全、标准的 JWT 用户认证系统。
 
-"我需要为现有 Express 项目添加用户注册功能。请先输出完整的 Spec，包括：
-1. 功能目标
-2. API 设计（RESTful）
-3. 数据模型
-4. 测试策略
-5. 安全边界（三层系统）"
+## Commands
+- POST /auth/register — 注册
+- POST /auth/login — 登录
+- POST /auth/logout — 登出
+- GET /auth/me — 获取当前用户
 
-## Step 2: Plan 阶段
+## Structure
+src/auth/{handlers,middleware,models}.go
 
-根据 Spec，拆解任务：
+## Code Style
+- Go 标准风格
+- 错误 wrap + context
+- 命名：表达意图
 
-1. 创建 User 模型（user.js + user.test.js）
-2. 实现 POST /api/users 路由
-3. 添加输入验证（email 格式、密码强度）
-4. 实现密码哈希（bcrypt）
-5. 集成测试
+## Testing
+- 覆盖率 > 85%
+- 包含边界条件测试
 
-## Step 3: Build + Verify 循环
+## Boundaries
+- 无第三方 OAuth
+- 不存储明文密码
+EOF
+"
 
-每个小任务执行：
-1. 实现代码
-2. 编写/更新测试
-3. 运行测试验证
-4. 五轴自检
-5. 提交（如果变更 ~100 行以内）
+# 2. 拆解任务
+openclaw exec -- "cat > TASKS.md << 'EOF'
+## 任务列表
 
-## Step 4: Review 阶段
-
-功能完成后，执行完整 review：
-
-- Correctness：测试全部通过？
-- Readability：代码可读？
-- Architecture：模块边界清晰？
-- Security：无安全问题？
-- Performance：无性能隐患？
-
-## Step 5: Ship 阶段
-
-检查清单：
-- [ ] 所有测试通过
-- [ ] 代码已格式化
-- [ ] 无 lint 警告
-- [ ] 安全扫描通过
-- [ ] 已更新文档（如需要）
+1. [ ] 定义数据模型 (models.go) — 25 行
+2. [ ] 实现注册 handler (handlers.go) — 40 行
+3. [ ] 实现登录 handler + JWT — 50 行
+4. [ ] 编写中间件 (middleware.go) — 30 行
+5. [ ] 单元测试 (覆盖率 > 85%) — 60 行
+6. [ ] 集成测试 — 40 行
+EOF
+"
 ```
 
-### 7.2 多 Agent 协作场景
-
-当任务复杂时，使用 sessions_spawn 并行处理：
+#### Phase 2: BUILD + VERIFY
 
 ```markdown
-# 并行开发示例
+# 3. 增量实现 — 每个任务单独 commit
+openclaw exec -- "
+# Task 1: 数据模型
+cat > src/auth/models.go << 'EOF'
+package auth
 
-任务：需要同时开发前端注册表单和后端 API
+import \"time\"
 
-主 Agent（你）：
-- 负责任务分配和协调
-- 执行后端 API 开发
-- 最终集成测试
+type User struct {
+    ID        string    \`json:\"id\"\`
+    Email     string    \`json:\"email\"\`
+    Password  string    \`json:\"-\"\`
+    CreatedAt time.Time \`json:\"created_at\"\`
+}
 
-子 Agent（spawned）：
-- 执行前端表单开发
-- 使用相同的 Spec 和安全边界
+type RegisterRequest struct {
+    Email    string \`json:\"email\"\`
+    Password string \`json:\"password\"\`
+}
+EOF
 
-主 Agent 发出指令：
-"请用 sessions_spawn 启动两个子 Agent：
-1. backend-dev：实现 POST /api/users
-2. frontend-dev：实现注册表单组件
+git add src/auth/models.go
+git commit -m 'auth: define User and RegisterRequest models'
+"
 
-两者都遵循以下规范：
-- Spec: 用户注册模块 v1.0
-- 安全边界：Always do / Ask first / Never do
-- 变更限制：单个 commit ≤ 100 行"
+# 4. 运行测试验证
+openclaw exec -- "go test ./src/auth/... -cover -v"
+```
+
+#### Phase 3: REVIEW
+
+```markdown
+# 5. 五轴 Review
+openclaw exec -- "
+echo '=== Correctness Check ==='
+go test ./... -race
+
+echo '=== Security Check ==='
+gosec ./...
+
+echo '=== Readability Check ==='
+# 检查函数长度
+for f in src/auth/*.go; do
+    lines=\$(wc -l < \$f)
+    if [ \$lines -gt 80 ]; then
+        echo \"⚠️  \$f has \$lines lines (target: <80)\"
+    fi
+done
+"
+```
+
+#### Phase 4: SHIP
+
+```markdown
+# 6. 上线前检查
+openclaw exec -- "
+cat > DEPLOY-CHECKLIST.md << 'EOF'
+- [x] 所有测试通过
+- [x] gosec 无高危漏洞
+- [x] 无硬编码 secrets
+- [x] 文档已更新
+- [x] 特性开关已配置
+- [x] 回滚方案已准备
+EOF
+
+# 7. 原子提交
+git add -p
+git commit -m 'feat(auth): complete user auth system'
+git tag 'v1.0.0'
+"
+```
+
+### 7.2 OpenClaw Skill 触发器配置
+
+为了在 OpenClaw 中更好地集成 Addy Osmani 体系，可以配置 skill 触发器：
+
+```markdown
+# ~/.openclaw/skills/openclaw-dev-workflow/SKILL.md
+
+# OpenClaw Dev Workflow Skill
+
+## 触发描述
+当用户提到以下关键词时激活：
+- "新项目"、"启动开发"、"规划任务"
+- "写代码"、"实现功能"、"添加接口"
+- "运行测试"、"验证代码"、"测试通过"
+- "code review"、"审查代码"、"检查质量"
+- "部署"、"上线"、"发布版本"
+- "安全"、"漏洞"、"认证"
+
+## 关联 Skills
+- planning-and-task-breakdown
+- spec-driven-development
+- test-driven-development
+- code-review-and-quality
+- security-and-hardening
+- shipping-and-launch
+- code-simplification
+
+## 工作流引导
+
+### 当用户说"新项目"时
+→ 引导进入 DEFINE 阶段
+→ 提供 SPEC.md 模板
+→ 提醒"假设前置确认"
+
+### 当用户说"实现 XX 功能"时
+→ 引导进入 BUILD 阶段
+→ 强调增量实现（薄切片）
+→ 提醒测试先行
+
+### 当用户说"代码写完了"时
+→ 引导进入 VERIFY + REVIEW 阶段
+→ 执行五轴评估
+→ 检查变更规模（100 行原则）
+
+### 当用户说"准备上线"时
+→ 引导进入 SHIP 阶段
+→ 提供上线检查清单
+→ 提醒特性开关和回滚方案
 ```
 
 ---
 
-## 八、工具速查卡
+## 8. 总结：建立你的质量门禁习惯
 
-| 工作流 | OpenClaw 工具 | 关键参数 |
-|--------|---------------|----------|
-| 运行测试 | `exec` | `command: "npm test"` |
-| 代码格式检查 | `exec` | `command: "npm run lint"` |
-| 类型检查 | `exec` | `command: "npx tsc --noEmit"` |
-| Git 提交 | `exec` | `command: "git add . && git commit"` |
-| 安全扫描 | `exec` | `command: "npm audit"` |
-| 浏览器验证 | `browser` | `action: "snapshot"` |
-| 并行开发 | `sessions_spawn` | `mode: "run"` |
-| 状态同步 | `sessions_send` | `sessionKey` |
+### 核心要点回顾
 
----
+| 阶段 | 核心习惯 | OpenClaw 工具 |
+|------|----------|---------------|
+| DEFINE | Spec before code | `exec` 创建 SPEC.md |
+| PLAN | 原子任务拆分 | `exec` + `sessions_spawn` |
+| BUILD | 薄切片 + 测试先行 | `exec` + `go test` |
+| VERIFY | 测试即证明 | `go test -race -cover` |
+| REVIEW | 五轴评估 | `gosec` + `git diff` |
+| SHIP | 检查清单 + 回滚方案 | `exec` + `git tag` |
+| 辅助 | 代码简化 | `/code-simplify` |
 
-## 九、总结
+### 下一步
 
-将 Addy Osmani 的七大命令体系和质量门禁设计融入 OpenClaw，可以显著提升 AI 编码的可靠性和规范性。
+1. **立即实践**：选择一个小型任务，用七大命令体系走一遍完整流程
+2. **建立习惯**：在 OpenClaw workspace 中创建 `SPEC.md` 和 `TASKS.md` 模板
+3. **持续改进**：根据实际经验，调整各阶段的具体检查项
+4. **分享反馈**：将你的实践记录到 `~/.openclaw/shared/context/recent/`
 
-**核心要点**：
-
-1. **先 Spec 再代码**：用六区域框架明确需求和边界
-2. **小步快跑**：遵循 100 行原则，频繁验证
-3. **五轴自检**：Correctness / Readability / Architecture / Security / Performance
-4. **三层安全边界**：Always do / Ask first / Never do
-5. **善用工具**：exec 做自动化检查，sessions_spawn 做并行开发
+> 💡 **记住**：AI 编码的质量上限，由你的开发流程下限决定。建立质量门禁不是为了限制 AI 的能力，而是为了让 AI 的每一次输出都经得起检验。
 
 ---
 
-## 附录：相关资源
-
-- [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) — 官方 Skills 仓库（17k+ Stars）
-- [OpenClaw Skills 系统](https://docs.openclaw.ai) — Skill 创建和管理指南
-- [OpenClaw 编码代理](../coding-agent/) — OpenClaw 官方编码技能
-
----
-
-*🦦 本教程由墨客-内容生成基于深度调研自动生成*  
-*调研报告：[深度调研报告-AddyOsmani-AgentSkills-2026-04-20.md](../../tmp/深度调研报告-AddyOsmani-AgentSkills-2026-04-20.md)*
+*🦦 本教程基于 Addy Osmani Agent Skills 框架编写，旨在帮助 OpenClaw 用户建立系统性的开发流程规范。*
